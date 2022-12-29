@@ -14,6 +14,7 @@ import (
 
 var acceptAllCerts = &tls.Config{InsecureSkipVerify: true}
 var srv = httptest.NewServer(nil)
+var https = httptest.NewTLSServer(nil)
 
 type ConstantHandler string
 
@@ -61,5 +62,8 @@ func TestSimpleHttpReqWithProxy(t *testing.T) {
 
 	if r := string(getOrFail(srv.URL+"/bobo", client, t)); r != "bobo" {
 		t.Error("proxy server does not serve constant handlers", r)
+	}
+	if string(getOrFail(https.URL+"/bobo", client, t)) != "bobo" {
+		t.Error("TLS server does not serve constant handlers, when proxy is used")
 	}
 }
