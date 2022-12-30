@@ -67,3 +67,18 @@ func TestSimpleHttpReqWithProxy(t *testing.T) {
 		t.Error("TLS server does not serve constant handlers, when proxy is used")
 	}
 }
+
+func TestSimpleHook(t *testing.T) {
+	proxy := myproxy.NewProxyHttpServer()
+	proxy.OnRequest(myproxy.SrcIpIs("127.0.0.1")).DoFunc(func(req *http.Request, ctx *myproxy.ProxyCtx) (*http.Request, *http.Response) {
+		req.URL.Path = "/bobo"
+		return req, nil
+	})
+	client, l := oneShotProxy(proxy, t)
+	defer l.Close()
+
+	if result := string(getOrFail(srv.URL+("/momo"), client, t)); result != "bobo" {
+		t.Error("Redirecting all requests from 127.0.0.1 to bobo, didn't work." +
+			" (Might break if Go's client sets RemoteAddr to IPv6 address). Got: " + result)
+	}
+}
