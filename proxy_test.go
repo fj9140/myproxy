@@ -1,6 +1,7 @@
 package myproxy_test
 
 import (
+	"bytes"
 	"crypto/tls"
 	"io"
 	"io/ioutil"
@@ -80,5 +81,54 @@ func TestSimpleHook(t *testing.T) {
 	if result := string(getOrFail(srv.URL+("/momo"), client, t)); result != "bobo" {
 		t.Error("Redirecting all requests from 127.0.0.1 to bobo, didn't work." +
 			" (Might break if Go's client sets RemoteAddr to IPv6 address). Got: " + result)
+	}
+}
+
+func TestAlwayHook(t *testing.T) {
+	proxy := myproxy.NewProxyHttpServer()
+	proxy.OnRequest().DoFunc(func(req *http.Request, ctx *myproxy.ProxyCtx) (*http.Request, *http.Response) {
+		req.URL.Path = "/bobo"
+		return req, nil
+	})
+	client, l := oneShotProxy(proxy, t)
+	defer l.Close()
+
+	if result := string(getOrFail(srv.URL+("/momo"), client, t)); result != "bobo" {
+		t.Error("Redirecting all requests to bobo, didn't work." +
+			" (Might break if Go's client sets RemoteAddr to IPv6 address). Got: " + result)
+	}
+}
+
+func TestReplaceResponse(t *testing.T) {
+	proxy := myproxy.NewProxyHttpServer()
+	proxy.OnResponse().DoFunc(func(resp *http.Response, ctx *myproxy.ProxyCtx) *http.Response {
+		resp.StatusCode = http.StatusOK
+		resp.Body = ioutil.NopCloser(bytes.NewBufferString("chico"))
+		return resp
+	})
+	client, l := oneShotProxy(proxy, t)
+	defer l.Close()
+
+	if result := string(getOrFail(srv.URL+"/momo", client, t)); result != "chico" {
+		t.Error("hooked response, should be chico, instead:", result)
+	}
+}
+
+func TestReplaceResponseForUrl(t *testing.T) {
+	proxy := myproxy.NewProxyHttpServer()
+	proxy.OnResponse(myproxy.UrlIs("/koko")).DoFunc(func(resp *http.Response, ctx *myproxy.ProxyCtx) *http.Response {
+		resp.StatusCode = http.StatusOK
+		resp.Body = ioutil.NopCloser(bytes.NewBufferString("chico"))
+		return resp
+	})
+
+	client, l := oneShotProxy(proxy, t)
+	defer l.Close()
+
+	if result := string(getOrFail(srv.URL+"/koko", client, t)); result != "chico" {
+		t.Error("hooked 'koko', should be chico, instead:", result)
+	}
+	if result := string(getOrFail(srv.URL+"/bobo", client, t)); result != "bobo" {
+		t.Error("still, bobo should stay as usual, instead:", result)
 	}
 }
