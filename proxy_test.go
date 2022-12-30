@@ -3,11 +3,13 @@ package myproxy_test
 import (
 	"bytes"
 	"crypto/tls"
+	"image"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"testing"
 
 	"github.com/fj9140/myproxy"
@@ -16,6 +18,7 @@ import (
 var acceptAllCerts = &tls.Config{InsecureSkipVerify: true}
 var srv = httptest.NewServer(nil)
 var https = httptest.NewTLSServer(nil)
+var fs = httptest.NewServer(http.FileServer(http.Dir(".")))
 
 type ConstantHandler string
 
@@ -55,6 +58,10 @@ func getOrFail(url string, client *http.Client, t *testing.T) []byte {
 		t.Fatal("Can't fetch url", url, err)
 	}
 	return txt
+}
+
+func localFile(url string) string {
+	return fs.URL + "/" + url
 }
 
 func TestSimpleHttpReqWithProxy(t *testing.T) {
@@ -131,4 +138,73 @@ func TestReplaceResponseForUrl(t *testing.T) {
 	if result := string(getOrFail(srv.URL+"/bobo", client, t)); result != "bobo" {
 		t.Error("still, bobo should stay as usual, instead:", result)
 	}
+}
+
+func TestOneShotFileServer(t *testing.T) {
+	client, l := oneShotProxy(myproxy.NewProxyHttpServer(), t)
+	defer l.Close()
+
+	file := "test_data/panda.png"
+	info, err := os.Stat(file)
+	if err != nil {
+		t.Fatal("Cannot find ", file)
+	}
+	if resp, err := client.Get(fs.URL + "/" + file); err == nil {
+		b, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal("got", string(b))
+		}
+		if int64(len(b)) != info.Size() {
+			t.Error("Expected Length", file, info.Size(), "actually", len(b), "starts", string(b[:10]))
+		}
+	} else {
+		t.Fatal("Cannot read from fs server", err)
+	}
+}
+
+func TestContentType(t *testing.T) {
+	proxy := myproxy.NewProxyHttpServer()
+	proxy.OnResponse(myproxy.ContentTypeIs("image/png")).DoFunc(func(resp *http.Response, ctx *myproxy.ProxyCtx) *http.Response {
+		resp.Header.Set("X-Shmoopi", "1")
+		return resp
+	})
+
+	client, l := oneShotProxy(proxy, t)
+	defer l.Close()
+
+	for _, file := range []string{"test_data/panda.png", "test_data/football.png"} {
+		if resp, err := client.Get(localFile(file)); err != nil || resp.Header.Get("X-Shmoopi") != "1" {
+			if err == nil {
+				t.Error("pngs should have X-Shmoopi header = 1, actually", resp.Header.Get("X-Shmoopi"))
+			} else {
+				t.Error("error reading png", err)
+			}
+		}
+	}
+
+	file := "baby.jpg"
+	if resp, err := client.Get(localFile(file)); err != nil || resp.Header.Get("X-Shmoopi") != "" {
+		if err == nil {
+			t.Error("Non png images should NOT have X-Shmoopi header at all", resp.Header.Get("X-Shmoopi"))
+		} else {
+			t.Error("error reading png", err)
+		}
+	}
+}
+
+func getImage(file string, t *testing.T) image.Image {
+	newimage, err := ioutil.ReadFile(file)
+	if err != nil {
+		t.Fatal("Cannot read file", file, err)
+	}
+	img, _, err := image.Decode(bytes.NewReader(newimage))
+	if err != nil {
+		t.Fatal("Cannot decode image", file, err)
+	}
+	return img
+}
+
+func TestConstantImageHandler(t *testing.T) {
+	proxy := myproxy.NewProxyHttpServer()
+
 }

@@ -11,19 +11,34 @@ import (
 )
 
 type ProxyHttpServer struct {
-	Verbose            bool
-	Tr                 *http.Transport
-	sess               int64
-	Logger             Logger
-	httpsHandlers      []HttpsHandler
-	CertStore          CertStorage
-	ConnectDial        func(network string, addr string) (net.Conn, error)
-	ConnectDialWithReq func(req *http.Request, network string, addr string) (net.Conn, error)
-	reqHandlers        []ReqHandler
-	respHandlers       []RespHandler
+	Verbose                bool
+	Tr                     *http.Transport
+	sess                   int64
+	Logger                 Logger
+	httpsHandlers          []HttpsHandler
+	CertStore              CertStorage
+	ConnectDial            func(network string, addr string) (net.Conn, error)
+	ConnectDialWithReq     func(req *http.Request, network string, addr string) (net.Conn, error)
+	reqHandlers            []ReqHandler
+	respHandlers           []RespHandler
+	KeepDestinationHeaders bool
 }
 
 var hasPort = regexp.MustCompile(`:\d+$`)
+
+func copyHeaders(dst, src http.Header, keepDestHeaders bool) {
+	if !keepDestHeaders {
+		for k := range dst {
+			dst.Del(k)
+		}
+	}
+
+	for k, vs := range src {
+		for _, v := range vs {
+			dst.Add(k, v)
+		}
+	}
+}
 
 func (proxy *ProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "CONNECT" {
@@ -45,6 +60,9 @@ func (proxy *ProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		}
 
 		resp = proxy.filterResponse(resp, ctx)
+
+		copyHeaders(w.Header(), resp.Header, proxy.KeepDestinationHeaders)
+		w.WriteHeader(resp.StatusCode)
 
 		io.Copy(w, resp.Body)
 	}

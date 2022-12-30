@@ -70,6 +70,22 @@ func UrlIs(urls ...string) ReqConditionFunc {
 	}
 }
 
+func ContentTypeIs(typ string, types ...string) RespCondition {
+	types = append(types, typ)
+	return RespConditionFunc(func(resp *http.Response, ctx *ProxyCtx) bool {
+		if resp == nil {
+			return false
+		}
+		contentType := resp.Header.Get("Content-Type")
+		for _, typ := range types {
+			if contentType == typ || strings.HasPrefix(contentType, typ+";") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
 func (pcond *ReqProxyConds) Do(h ReqHandler) {
 	pcond.proxy.reqHandlers = append(pcond.proxy.reqHandlers, FuncReqHandler(func(r *http.Request, ctx *ProxyCtx) (*http.Request, *http.Response) {
 		for _, cond := range pcond.reqConds {
