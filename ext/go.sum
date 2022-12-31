@@ -2,3 +2,5 @@ github.com/fj9140/myproxy v0.0.0-20221229140513-9a1033b35177 h1:WKTrYJVAkpQiiPh4
 github.com/fj9140/myproxy v0.0.0-20221229140513-9a1033b35177/go.mod h1:VJ1VzkhsCsv/dFhWZakQbKKMn/5faOqENa2nD41kcms=
 github.com/fj9140/myproxy v0.0.0-20221230113733-7bbec1c90945 h1:LJ9q+IuV+rdlLS9TUsvhgZUFXdIE+evLZsstY9YOpOk=
 github.com/fj9140/myproxy v0.0.0-20221230113733-7bbec1c90945/go.mod h1:VJ1VzkhsCsv/dFhWZakQbKKMn/5faOqENa2nD41kcms=
+github.com/fj9140/myproxy/regretable v0.0.0-20221231094736-95cf3d97a458 h1:Zwues8JzkseIfApQMpH8Zthw83nSy7kEsg/OoS5ejSs=
+github.com/fj9140/myproxy/regretable v0.0.0-20221231094736-95cf3d97a458/go.mod h1:ef/w21mkTFuj9Wv2BzeKjhMPJHo4kQZI5cq/Lf3zNFk=
