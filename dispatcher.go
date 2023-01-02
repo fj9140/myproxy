@@ -86,6 +86,17 @@ func ContentTypeIs(typ string, types ...string) RespCondition {
 	})
 }
 
+func ReqHostIs(hosts ...string) ReqConditionFunc {
+	hostSet := make(map[string]bool)
+	for _, h := range hosts {
+		hostSet[h] = true
+	}
+	return func(req *http.Request, ctx *ProxyCtx) bool {
+		_, ok := hostSet[req.URL.Host]
+		return ok
+	}
+}
+
 func (pcond *ReqProxyConds) Do(h ReqHandler) {
 	pcond.proxy.reqHandlers = append(pcond.proxy.reqHandlers, FuncReqHandler(func(r *http.Request, ctx *ProxyCtx) (*http.Request, *http.Response) {
 		for _, cond := range pcond.reqConds {
@@ -119,4 +130,23 @@ func (pcond *ProxyConds) Do(h RespHandler) {
 
 func (pcond *ProxyConds) DoFunc(f func(resp *http.Response, ctx *ProxyCtx) *http.Response) {
 	pcond.Do(FuncRespHandler(f))
+}
+
+func (pcond *ReqProxyConds) HandleConnect(h HttpsHandler) {
+	pcond.proxy.httpsHandlers = append(pcond.proxy.httpsHandlers, FuncHttpsHandler(func(host string, ctx *ProxyCtx) (*ConnectAction, string) {
+		for _, cond := range pcond.reqConds {
+			if !cond.HandleReq(ctx.Req, ctx) {
+				return nil, ""
+			}
+		}
+		return h.HandleConnect(host, ctx)
+	}))
+}
+
+func (pcond *ReqProxyConds) HandleConnectFunc(f func(host string, ctx *ProxyCtx) (*ConnectAction, string)) {
+	pcond.HandleConnect(FuncHttpsHandler(f))
+}
+
+var AlwaysMitm FuncHttpsHandler = func(host string, ctx *ProxyCtx) (*ConnectAction, string) {
+	return MitmConnect, host
 }

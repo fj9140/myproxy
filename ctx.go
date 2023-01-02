@@ -13,6 +13,7 @@ type ProxyCtx struct {
 	Resp         *http.Response
 	RoundTripper RoundTripper
 	certStore    CertStorage
+	UserData     interface{}
 }
 
 type RoundTripper interface {

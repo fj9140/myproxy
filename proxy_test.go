@@ -1,24 +1,38 @@
 package myproxy_test
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"image"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/fj9140/myproxy"
+	myproxy_image "github.com/fj9140/myproxy/ext/image"
 )
 
 var acceptAllCerts = &tls.Config{InsecureSkipVerify: true}
 var srv = httptest.NewServer(nil)
 var https = httptest.NewTLSServer(nil)
 var fs = httptest.NewServer(http.FileServer(http.Dir(".")))
+
+type QueryHandler struct{}
+
+func (QueryHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if err := req.ParseForm(); err != nil {
+		panic(err)
+	}
+	io.WriteString(w, req.Form.Get("result"))
+}
 
 type ConstantHandler string
 
@@ -28,6 +42,7 @@ func (h ConstantHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func init() {
 	http.DefaultServeMux.Handle("/bobo", ConstantHandler("bobo"))
+	http.DefaultServeMux.Handle("/query", QueryHandler{})
 }
 
 func oneShotProxy(proxy *myproxy.ProxyHttpServer, t *testing.T) (client *http.Client, s *httptest.Server) {
@@ -62,6 +77,19 @@ func getOrFail(url string, client *http.Client, t *testing.T) []byte {
 
 func localFile(url string) string {
 	return fs.URL + "/" + url
+}
+
+func panicOnErr(err error, msg string) {
+	if err != nil {
+		println(err.Error() + ":-" + msg)
+		os.Exit(-1)
+	}
+}
+
+func fataOnErr(err error, msg string, t *testing.T) {
+	if err != nil {
+		t.Fatal(msg, err)
+	}
 }
 
 func TestSimpleHttpReqWithProxy(t *testing.T) {
@@ -204,7 +232,367 @@ func getImage(file string, t *testing.T) image.Image {
 	return img
 }
 
+func compareImage(eImg, aImg image.Image, t *testing.T) {
+	if eImg.Bounds().Dx() != aImg.Bounds().Dx() || eImg.Bounds().Dy() != aImg.Bounds().Dy() {
+		t.Error("image size different")
+		return
+	}
+	for i := 0; i < eImg.Bounds().Dx(); i++ {
+		for j := 0; j < eImg.Bounds().Dy(); j++ {
+			er, eg, eb, ea := eImg.At(i, j).RGBA()
+			ar, ag, ab, aa := aImg.At(i, j).RGBA()
+			if er != ar || eg != ag || eb != ab || ea != aa {
+				t.Error("images different at", i, j, "vals\n", er, eg, eb, ea, "\n", ar, ag, ab, aa, aa)
+				return
+			}
+		}
+	}
+}
+
 func TestConstantImageHandler(t *testing.T) {
 	proxy := myproxy.NewProxyHttpServer()
+	football := getImage("test_data/football.png", t)
+	proxy.OnResponse().Do(myproxy_image.HandleImage(func(img image.Image, ctx *myproxy.ProxyCtx) image.Image {
+		return football
+	}))
+
+	client, l := oneShotProxy(proxy, t)
+	defer l.Close()
+
+	resp, err := client.Get(localFile("test_data/panda.png"))
+	if err != nil {
+		t.Fatal("Cannot get panda.png", err)
+	}
+
+	img, _, err := image.Decode(resp.Body)
+	if err != nil {
+		t.Error("decode", err)
+	} else {
+		compareImage(football, img, t)
+	}
+}
+
+func TestImageHandler(t *testing.T) {
+	proxy := myproxy.NewProxyHttpServer()
+	football := getImage("test_data/football.png", t)
+
+	proxy.OnResponse(myproxy.UrlIs("/test_data/panda.png")).Do(myproxy_image.HandleImage(func(img image.Image, ctx *myproxy.ProxyCtx) image.Image {
+		return football
+	}))
+
+	client, l := oneShotProxy(proxy, t)
+	defer l.Close()
+
+	resp, err := client.Get(localFile("test_data/panda.png"))
+	if err != nil {
+		t.Fatal("Cannot get panda.png", err)
+	}
+
+	img, _, err := image.Decode(resp.Body)
+	if err != nil {
+		t.Error("decode", err)
+	} else {
+		compareImage(football, img, t)
+	}
+
+	resp, err = client.Get(localFile("test_data/panda.png"))
+	if err != nil {
+		t.Fatal("Cannot get panda.png", err)
+	}
+
+	img, _, err = image.Decode(resp.Body)
+	if err != nil {
+		t.Error("decode", err)
+	} else {
+		compareImage(football, img, t)
+	}
+}
+
+func TestChangeResp(t *testing.T) {
+	proxy := myproxy.NewProxyHttpServer()
+	proxy.OnResponse().DoFunc(func(resp *http.Response, ctx *myproxy.ProxyCtx) *http.Response {
+		resp.Body.Read([]byte{0})
+		resp.Body = ioutil.NopCloser(new(bytes.Buffer))
+		return resp
+	})
+
+	client, l := oneShotProxy(proxy, t)
+	defer l.Close()
+
+	resp, err := client.Get(localFile("test_data/panda.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ioutil.ReadAll(resp.Body)
+	_, err = client.Get(localFile("/bobo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReplaceIage(t *testing.T) {
+	proxy := myproxy.NewProxyHttpServer()
+
+	panda := getImage("test_data/panda.png", t)
+	football := getImage("test_data/football.png", t)
+
+	proxy.OnResponse(myproxy.UrlIs("/test_data/panda.png")).Do(myproxy_image.HandleImage(func(img image.Image, ctx *myproxy.ProxyCtx) image.Image {
+		return football
+	}))
+	proxy.OnResponse(myproxy.UrlIs("/test_data/football.png")).Do(myproxy_image.HandleImage(func(img image.Image, ctx *myproxy.ProxyCtx) image.Image {
+		return panda
+	}))
+
+	client, l := oneShotProxy(proxy, t)
+	defer l.Close()
+
+	imgByPandaReq, _, err := image.Decode(bytes.NewReader(getOrFail(localFile("test_data/panda.png"), client, t)))
+	fataOnErr(err, "decode panda", t)
+	compareImage(football, imgByPandaReq, t)
+
+	imgByFootballReq, _, err := image.Decode(bytes.NewReader(getOrFail(localFile("test_data/football.png"), client, t)))
+	fataOnErr(err, "decode football", t)
+	compareImage(panda, imgByFootballReq, t)
+}
+
+func getCert(c *tls.Conn, t *testing.T) []byte {
+	if err := c.Handshake(); err != nil {
+		t.Fatal("cannot handshake", err)
+	}
+	return c.ConnectionState().PeerCertificates[0].Raw
+}
+
+func TestSimpleMitm(t *testing.T) {
+	proxy := myproxy.NewProxyHttpServer()
+	proxy.OnRequest(myproxy.ReqHostIs(https.Listener.Addr().String())).HandleConnect(myproxy.AlwaysMitm)
+	proxy.OnRequest(myproxy.ReqHostIs("no such host exists")).HandleConnect(myproxy.AlwaysMitm)
+
+	client, l := oneShotProxy(proxy, t)
+	defer l.Close()
+
+	c, err := tls.Dial("tcp", https.Listener.Addr().String(), &tls.Config{InsecureSkipVerify: true})
+	if err != nil {
+		t.Fatal("cannot dial to tcp server", err)
+	}
+	origCert := getCert(c, t)
+	c.Close()
+
+	c2, err := net.Dial("tcp", l.Listener.Addr().String())
+	if err != nil {
+		t.Fatal("dialing to proxy", err)
+	}
+	creq, err := http.NewRequest("CONNECT", https.URL, nil)
+	if err != nil {
+		t.Fatal("create new request", err)
+	}
+	creq.Write(c2)
+	c2buf := bufio.NewReader(c2)
+	resp, err := http.ReadResponse(c2buf, creq)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatal("Cannot CONNECT through proxy", err)
+	}
+	c2tls := tls.Client(c2, &tls.Config{InsecureSkipVerify: true})
+	proxyCert := getCert(c2tls, t)
+
+	if bytes.Equal(proxyCert, origCert) {
+		t.Errorf("Certificate after mitm is not different \n%v\n%v",
+			base64.StdEncoding.EncodeToString(origCert),
+			base64.StdEncoding.EncodeToString(proxyCert))
+	}
+
+	if resp := string(getOrFail(https.URL+"/bobo", client, t)); resp != "bobo" {
+		t.Error("Wrong response when mitm", resp, "expected bobo")
+	}
+	if resp := string(getOrFail(https.URL+"/query?result=bar", client, t)); resp != "bar" {
+		t.Error("Wrong response when mitm", resp, "expected bar")
+	}
+}
+
+func TestConnectHandler(t *testing.T) {
+	proxy := myproxy.NewProxyHttpServer()
+	althttps := httptest.NewTLSServer(ConstantHandler("althttps"))
+	proxy.OnRequest().HandleConnectFunc(func(host string, ctx *myproxy.ProxyCtx) (*myproxy.ConnectAction, string) {
+		u, _ := url.Parse(althttps.URL)
+		return myproxy.OkConnect, u.Host
+	})
+
+	client, l := oneShotProxy(proxy, t)
+	defer l.Close()
+	if resp := string(getOrFail(https.URL+"/alturl", client, t)); resp != "althttps" {
+		t.Error("Proxy should redirect CONNECT request to local althttps server, expected 'althttps' got ", resp)
+	}
+}
+
+func TestMitmIsFiltered(t *testing.T) {
+	proxy := myproxy.NewProxyHttpServer()
+	proxy.OnRequest(myproxy.ReqHostIs(https.Listener.Addr().String())).HandleConnect(myproxy.AlwaysMitm)
+	proxy.OnRequest(myproxy.UrlIs("/momo")).DoFunc(func(req *http.Request, ctx *myproxy.ProxyCtx) (*http.Request, *http.Response) {
+		return nil, myproxy.TextResponse(req, "koko")
+	})
+
+	client, l := oneShotProxy(proxy, t)
+	defer l.Close()
+
+	if resp := string(getOrFail(https.URL+"/momo", client, t)); resp != "koko" {
+		t.Error("Proxy should capture /momo to be koko and not", resp)
+	}
+
+	if resp := string(getOrFail(https.URL+"/bobo", client, t)); resp != "bobo" {
+		t.Error("But still /bobo should be bobo and not", resp)
+	}
+}
+
+func TestFirstHandlerMatches(t *testing.T) {
+	proxy := myproxy.NewProxyHttpServer()
+	proxy.OnRequest().DoFunc(func(req *http.Request, ctx *myproxy.ProxyCtx) (*http.Request, *http.Response) {
+		return nil, myproxy.TextResponse(req, "koko")
+	})
+	proxy.OnRequest().DoFunc(func(req *http.Request, ctx *myproxy.ProxyCtx) (*http.Request, *http.Response) {
+		panic("should never get here,previous response is null")
+	})
+
+	client, l := oneShotProxy(proxy, t)
+	defer l.Close()
+
+	if resp := string(getOrFail(srv.URL+"/", client, t)); resp != "koko" {
+		t.Error("should return always koko not", resp)
+	}
+}
+
+type VerifyNoProxyHeaders struct {
+	*testing.T
+}
+
+func (v VerifyNoProxyHeaders) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Connection") != "" || r.Header.Get("Proxy-Connection") != "" || r.Header.Get("Proxy-Authenticate") != "" || r.Header.Get("Proxy-Authorization") != "" {
+		v.Error("Got Connection header from myproxy", r.Header)
+	}
+}
+
+func TestNoProxyHeaders(t *testing.T) {
+	s := httptest.NewServer(VerifyNoProxyHeaders{t})
+	client, l := oneShotProxy(myproxy.NewProxyHttpServer(), t)
+	defer l.Close()
+	req, err := http.NewRequest("GET", s.URL, nil)
+	panicOnErr(err, "bad request")
+	req.Header.Add("Connection", "close")
+	req.Header.Add("Proxy-Connection", "close")
+	req.Header.Add("Proxy-Authenticate", "auth")
+	req.Header.Add("Proxy-Authorization", "auth")
+	client.Do(req)
+}
+
+func TestNoProxyHeadersHttps(t *testing.T) {
+	s := httptest.NewTLSServer(VerifyNoProxyHeaders{t})
+	proxy := myproxy.NewProxyHttpServer()
+	proxy.OnRequest().HandleConnect(myproxy.AlwaysMitm)
+	client, l := oneShotProxy(proxy, t)
+	defer l.Close()
+	req, err := http.NewRequest("GET", s.URL, nil)
+	panicOnErr(err, "bad request")
+	req.Header.Add("Connection", "close")
+	req.Header.Add("Proxy-Connection", "close")
+	client.Do(req)
+}
+
+func TestHeadReqHasContentLength(t *testing.T) {
+	client, l := oneShotProxy(myproxy.NewProxyHttpServer(), t)
+	defer l.Close()
+
+	resp, err := client.Head(localFile("test_data/panda.png"))
+	panicOnErr(err, "resp to HEAD")
+	if resp.Header.Get("Content-Length") == "" {
+		t.Error("Content-Length should exist on HEAD requests")
+	}
+}
+
+func TestChunkedResponse(t *testing.T) {
+	l, err := net.Listen("tcp", ":10234")
+	panicOnErr(err, "listen")
+	defer l.Close()
+	go func() {
+		for i := 0; i < 2; i++ {
+			c, err := l.Accept()
+			panicOnErr(err, "accept")
+			_, err = http.ReadRequest(bufio.NewReader(c))
+			panicOnErr(err, "readrequest")
+			io.WriteString(c, "HTTP/1.1 200 OK\r\n"+
+				"Content-Type: text/plain\r\n"+
+				"Transfer-Encoding: chunked\r\n\r\n"+
+				"25\r\n"+
+				"This is the data in the first chunk\r\n\r\n"+
+				"1C\r\n"+
+				"and this is the second one\r\n\r\n"+
+				"3\r\n"+
+				"con\r\n"+
+				"8\r\n"+
+				"sequence\r\n0\r\n\r\n")
+			c.Close()
+		}
+	}()
+
+	c, err := net.Dial("tcp", "localhost:10234")
+	panicOnErr(err, "dial")
+	defer c.Close()
+	req, _ := http.NewRequest("GET", "/", nil)
+	req.Write(c)
+	resp, err := http.ReadResponse(bufio.NewReader(c), req)
+	panicOnErr(err, "readresp")
+	b, err := ioutil.ReadAll(resp.Body)
+	panicOnErr(err, "readall")
+	expected := "This is the data in the first chunk\r\nand this is the second one\r\nconsequence"
+	if string(b) != expected {
+		t.Errorf("Got `%v` expected `%v`", string(b), expected)
+	}
+
+	proxy := myproxy.NewProxyHttpServer()
+	proxy.OnResponse().DoFunc(func(resp *http.Response, ctx *myproxy.ProxyCtx) *http.Response {
+		panicOnErr(ctx.Error, "error reading output")
+		b, err := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+		panicOnErr(err, "readall onresp")
+		if enc := resp.Header.Get("Transfer-Encoding"); enc != "" {
+			t.Fatal("Chunked response should be received as plaintext", enc)
+		}
+		resp.Body = ioutil.NopCloser(bytes.NewBufferString(strings.Replace(string(b), "e", "E", -1)))
+		return resp
+	})
+
+	client, s := oneShotProxy(proxy, t)
+	defer s.Close()
+
+	resp, err = client.Get("http://localhost:10234/")
+	panicOnErr(err, "client.Get")
+	b, err = ioutil.ReadAll(resp.Body)
+	panicOnErr(err, "readall proxy")
+	if string(b) != strings.Replace(expected, "e", "E", -1) {
+		t.Error("expected", expected, "w/ e->E. Got", string(b))
+	}
+}
+
+func TestMyproxyThroughProxy(t *testing.T) {
+	proxy := myproxy.NewProxyHttpServer()
+	proxy2 := myproxy.NewProxyHttpServer()
+	doubleString := func(resp *http.Response, ctx *myproxy.ProxyCtx) *http.Response {
+		b, err := ioutil.ReadAll(resp.Body)
+		panicOnErr(err, "readAll resp")
+		resp.Body = ioutil.NopCloser(bytes.NewBufferString(string(b) + " " + string(b)))
+		return resp
+	}
+	proxy.OnRequest().HandleConnect(myproxy.AlwaysMitm)
+	proxy.OnResponse().DoFunc(doubleString)
+
+	_, l := oneShotProxy(proxy, t)
+	defer l.Close()
+
+	proxy2.ConnectDial = proxy2.NewConnectDialToProxy(l.URL)
+	client, l2 := oneShotProxy(proxy2, t)
+	defer l2.Close()
+	if r := string(getOrFail(https.URL+"/bobo", client, t)); r != "bobo bobo" {
+		t.Error("Expected bobo doubled twice got", r)
+	}
+}
+
+func TestMyproxyHijackConnect(t *testing.T) {
 
 }

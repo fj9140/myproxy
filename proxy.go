@@ -1,6 +1,7 @@
 package myproxy
 
 import (
+	"bufio"
 	"io"
 	"log"
 	"net"
@@ -22,6 +23,19 @@ type ProxyHttpServer struct {
 	reqHandlers            []ReqHandler
 	respHandlers           []RespHandler
 	KeepDestinationHeaders bool
+	KeepHeader             bool
+}
+
+type flushWriter struct {
+	w io.Writer
+}
+
+func (fw flushWriter) Write(p []byte) (int, error) {
+	n, err := fw.w.Write(p)
+	if f, ok := fw.w.(http.Flusher); ok {
+		f.Flush()
+	}
+	return n, err
 }
 
 var hasPort = regexp.MustCompile(`:\d+$`)
@@ -40,6 +54,29 @@ func copyHeaders(dst, src http.Header, keepDestHeaders bool) {
 	}
 }
 
+func isEof(r *bufio.Reader) bool {
+	_, err := r.Peek(1)
+	if err == io.EOF {
+		return true
+	}
+	return false
+}
+
+func removeProxyHeaders(ctx *ProxyCtx, r *http.Request) {
+	r.RequestURI = ""
+	ctx.Logf("Sending request %v %v", r.Method, r.URL.String())
+
+	r.Header.Del("Accept-Encoding")
+	r.Header.Del("Proxy-Connection")
+	r.Header.Del("Proxy-Authenticate")
+	r.Header.Del("Proxy-Authorization")
+
+	if r.Header.Get("Connection") == "close" {
+		r.Close = false
+	}
+	r.Header.Del("Connection")
+}
+
 func (proxy *ProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "CONNECT" {
 		proxy.handleHttps(w, r)
@@ -50,6 +87,9 @@ func (proxy *ProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 
 		r, resp := proxy.filterRequest(r, ctx)
 		if resp == nil {
+			if !proxy.KeepHeader {
+				removeProxyHeaders(ctx, r)
+			}
 			resp, err = ctx.RoundTrip(r)
 			if err != nil {
 				ctx.Error = err
@@ -59,12 +99,31 @@ func (proxy *ProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 
+		var origBody io.ReadCloser
+		if resp != nil {
+			origBody = resp.Body
+			defer origBody.Close()
+		}
+
 		resp = proxy.filterResponse(resp, ctx)
+		ctx.Logf("Copying response to client %v [%d]", resp.Status, resp.StatusCode)
+
+		if origBody != resp.Body {
+			resp.Header.Del("Content-Length")
+		}
 
 		copyHeaders(w.Header(), resp.Header, proxy.KeepDestinationHeaders)
 		w.WriteHeader(resp.StatusCode)
+		var copyWriter io.Writer = w
+		if w.Header().Get("content-type") == "text/event-stream" {
+			copyWriter = &flushWriter{w: w}
+		}
 
-		io.Copy(w, resp.Body)
+		nr, err := io.Copy(copyWriter, resp.Body)
+		if err := resp.Body.Close(); err != nil {
+			ctx.Warnf("Can't close response body %v", err)
+		}
+		ctx.Logf("Copied %v bytes to client error=%v", nr, err)
 	}
 
 }

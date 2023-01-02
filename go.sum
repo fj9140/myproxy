@@ -1,0 +1,4 @@
+github.com/fj9140/myproxy/ext v0.0.0-20221231100930-c8dba5e40f32 h1:WpllFaUoJbH+EnTBU9+U/MiYoLBAAMtX3O4nv1TM7YU=
+github.com/fj9140/myproxy/ext v0.0.0-20221231100930-c8dba5e40f32/go.mod h1:iDzWO9CeVTZolKJUtIJVmI24CmuAnseXXPXJLi+3Ucw=
+github.com/fj9140/myproxy/regretable v0.0.0-20221231094736-95cf3d97a458 h1:Zwues8JzkseIfApQMpH8Zthw83nSy7kEsg/OoS5ejSs=
+github.com/fj9140/myproxy/regretable v0.0.0-20221231094736-95cf3d97a458/go.mod h1:ef/w21mkTFuj9Wv2BzeKjhMPJHo4kQZI5cq/Lf3zNFk=
