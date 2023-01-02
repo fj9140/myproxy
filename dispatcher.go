@@ -1,7 +1,9 @@
 package myproxy
 
 import (
+	"net"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -86,6 +88,18 @@ func ContentTypeIs(typ string, types ...string) RespCondition {
 	})
 }
 
+func DstHostIs(host string) ReqConditionFunc {
+	return func(req *http.Request, ctx *ProxyCtx) bool {
+		return req.URL.Host == host
+	}
+}
+
+func UrlMatches(re *regexp.Regexp) ReqConditionFunc {
+	return func(req *http.Request, ctx *ProxyCtx) bool {
+		return re.MatchString(req.URL.Path) || re.MatchString(req.URL.Host+req.URL.Path)
+	}
+}
+
 func ReqHostIs(hosts ...string) ReqConditionFunc {
 	hostSet := make(map[string]bool)
 	for _, h := range hosts {
@@ -145,6 +159,18 @@ func (pcond *ReqProxyConds) HandleConnect(h HttpsHandler) {
 
 func (pcond *ReqProxyConds) HandleConnectFunc(f func(host string, ctx *ProxyCtx) (*ConnectAction, string)) {
 	pcond.HandleConnect(FuncHttpsHandler(f))
+}
+
+func (pcond *ReqProxyConds) HijackConnect(f func(req *http.Request, client net.Conn, ctx *ProxyCtx)) {
+	pcond.proxy.httpsHandlers = append(pcond.proxy.httpsHandlers,
+		FuncHttpsHandler(func(host string, ctx *ProxyCtx) (*ConnectAction, string) {
+			for _, cond := range pcond.reqConds {
+				if !cond.HandleReq(ctx.Req, ctx) {
+					return nil, ""
+				}
+			}
+			return &ConnectAction{Action: ConnectHijack, Hijack: f}, host
+		}))
 }
 
 var AlwaysMitm FuncHttpsHandler = func(host string, ctx *ProxyCtx) (*ConnectAction, string) {

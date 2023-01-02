@@ -24,6 +24,7 @@ type ProxyHttpServer struct {
 	respHandlers           []RespHandler
 	KeepDestinationHeaders bool
 	KeepHeader             bool
+	NonproxyHandler        http.Handler
 }
 
 type flushWriter struct {
@@ -84,9 +85,18 @@ func (proxy *ProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		var err error
 		ctx := &ProxyCtx{Req: r, Proxy: proxy, Session: atomic.AddInt64(&proxy.sess, 1)}
 		ctx.Logf("Got request %v %v %v %v", r.URL.Path, r.Host, r.Method, r.URL.String())
+		if !r.URL.IsAbs() {
+			proxy.NonproxyHandler.ServeHTTP(w, r)
+			return
+		}
 
 		r, resp := proxy.filterRequest(r, ctx)
 		if resp == nil {
+			if isWebSocketRequest(r) {
+				ctx.Logf("Request looks like websocket upgrade.")
+				proxy.serveWebsocket(ctx, w, r)
+			}
+
 			if !proxy.KeepHeader {
 				removeProxyHeaders(ctx, r)
 			}
@@ -106,6 +116,20 @@ func (proxy *ProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		}
 
 		resp = proxy.filterResponse(resp, ctx)
+
+		if resp == nil {
+			var errorString string
+			if ctx.Error != nil {
+				errorString = "error read response" + r.URL.Host + " : " + ctx.Error.Error()
+				ctx.Logf(errorString)
+				http.Error(w, ctx.Error.Error(), 500)
+			} else {
+				errorString = "error read response " + r.URL.Host
+				ctx.Logf(errorString)
+				http.Error(w, errorString, 500)
+			}
+			return
+		}
 		ctx.Logf("Copying response to client %v [%d]", resp.Status, resp.StatusCode)
 
 		if origBody != resp.Body {
@@ -151,10 +175,14 @@ func (proxy *ProxyHttpServer) filterResponse(respOrig *http.Response, ctx *Proxy
 
 func NewProxyHttpServer() *ProxyHttpServer {
 	proxy := ProxyHttpServer{
-		Tr:           &http.Transport{TLSClientConfig: tlsClientSkipVerify, Proxy: http.ProxyFromEnvironment},
-		Logger:       log.New(os.Stderr, "", log.LstdFlags),
-		reqHandlers:  []ReqHandler{},
-		respHandlers: []RespHandler{},
+		Tr:            &http.Transport{TLSClientConfig: tlsClientSkipVerify, Proxy: http.ProxyFromEnvironment},
+		Logger:        log.New(os.Stderr, "", log.LstdFlags),
+		reqHandlers:   []ReqHandler{},
+		respHandlers:  []RespHandler{},
+		httpsHandlers: []HttpsHandler{},
+		NonproxyHandler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			http.Error(w, "This is a proxy server. Does not respond to non-proxy requests.", 500)
+		}),
 	}
 
 	proxy.ConnectDial = dialerFromEnv(&proxy)

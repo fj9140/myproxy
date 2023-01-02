@@ -1,6 +1,9 @@
 package myproxy
 
-import "crypto/tls"
+import (
+	"crypto/tls"
+	"crypto/x509"
+)
 
 var tlsClientSkipVerify = &tls.Config{InsecureSkipVerify: true}
 
@@ -94,3 +97,13 @@ cj/azKBaT04IOMLaN8xfSqitJYSraWMVNgGJM5vfcVaivZnNh0lZBv+qu6YkdM88
 -----END RSA PRIVATE KEY-----`)
 
 var MyproxyCa, myproxyCaErr = tls.X509KeyPair(CA_CERT, CA_KEY)
+
+func init() {
+	if myproxyCaErr != nil {
+		panic("Error parsing builtin CA" + myproxyCaErr.Error())
+	}
+	var err error
+	if MyproxyCa.Leaf, err = x509.ParseCertificate(MyproxyCa.Certificate[0]); err != nil {
+		panic("Error parsing builtin CA " + err.Error())
+	}
+}

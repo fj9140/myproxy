@@ -29,12 +29,15 @@ const (
 	ConnectAccept = iota
 	ConnectReject
 	ConnectMitm
+	ConnectHijack
+	ConnectHTTPMitm
 )
 
 var (
-	OkConnect   = &ConnectAction{Action: ConnectAccept, TLSConfig: TLSConfigFromCA(&MyproxyCa)}
-	MitmConnect = &ConnectAction{Action: ConnectMitm, TLSConfig: TLSConfigFromCA(&MyproxyCa)}
-	httpsRegexp = regexp.MustCompile(`^https:\/\/`)
+	OkConnect       = &ConnectAction{Action: ConnectAccept, TLSConfig: TLSConfigFromCA(&MyproxyCa)}
+	MitmConnect     = &ConnectAction{Action: ConnectMitm, TLSConfig: TLSConfigFromCA(&MyproxyCa)}
+	httpsRegexp     = regexp.MustCompile(`^https:\/\/`)
+	HTTPMitmConnect = &ConnectAction{Action: ConnectHTTPMitm, TLSConfig: TLSConfigFromCA(&MyproxyCa)}
 )
 
 type halfClosable interface {
@@ -103,6 +106,46 @@ func (proxy *ProxyHttpServer) handleHttps(w http.ResponseWriter, r *http.Request
 				proxyClient.Close()
 				targetSiteCon.Close()
 			}()
+		}
+	case ConnectHijack:
+		todo.Hijack(r, proxyClient, ctx)
+	case ConnectHTTPMitm:
+		proxyClient.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
+		ctx.Logf("Assumint CONNECT is plain HTTP tunneling, mitm proxying it")
+		targetSiteCon, err := proxy.connectDial(ctx, "tcp", host)
+		if err != nil {
+			ctx.Warnf("Error dialing to %s: %s", host, err.Error())
+			return
+		}
+
+		for {
+			client := bufio.NewReader(proxyClient)
+			remote := bufio.NewReader(targetSiteCon)
+			req, err := http.ReadRequest(client)
+			if err != nil && err != io.EOF {
+				ctx.Warnf("cannot read request of MITM HTTP client: %+#v", err)
+			}
+			if err != nil {
+				return
+			}
+			req, resp := proxy.filterRequest(req, ctx)
+			if resp == nil {
+				if err := req.Write(targetSiteCon); err != nil {
+					httpError(proxyClient, ctx, err)
+					return
+				}
+				resp, err = http.ReadResponse(remote, req)
+				if err != nil {
+					httpError(proxyClient, ctx, err)
+					return
+				}
+				defer resp.Body.Close()
+			}
+			resp = proxy.filterResponse(resp, ctx)
+			if err := resp.Write(proxyClient); err != nil {
+				httpError(proxyClient, ctx, err)
+				return
+			}
 		}
 	case ConnectMitm:
 		proxyClient.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
