@@ -36,6 +36,7 @@ const (
 var (
 	OkConnect       = &ConnectAction{Action: ConnectAccept, TLSConfig: TLSConfigFromCA(&MyproxyCa)}
 	MitmConnect     = &ConnectAction{Action: ConnectMitm, TLSConfig: TLSConfigFromCA(&MyproxyCa)}
+	RejectConnect   = &ConnectAction{Action: ConnectReject, TLSConfig: TLSConfigFromCA(&MyproxyCa)}
 	httpsRegexp     = regexp.MustCompile(`^https:\/\/`)
 	HTTPMitmConnect = &ConnectAction{Action: ConnectHTTPMitm, TLSConfig: TLSConfigFromCA(&MyproxyCa)}
 )
@@ -250,6 +251,13 @@ func (proxy *ProxyHttpServer) handleHttps(w http.ResponseWriter, r *http.Request
 			}
 			ctx.Logf("Exiting on EOF")
 		}()
+	case ConnectReject:
+		if ctx.Resp != nil {
+			if err := ctx.Resp.Write(proxyClient); err != nil {
+				ctx.Warnf("Cannot write response that reject http CONNECT: %v", err)
+			}
+		}
+		proxyClient.Close()
 	}
 
 }

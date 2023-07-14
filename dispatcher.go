@@ -176,3 +176,18 @@ func (pcond *ReqProxyConds) HijackConnect(f func(req *http.Request, client net.C
 var AlwaysMitm FuncHttpsHandler = func(host string, ctx *ProxyCtx) (*ConnectAction, string) {
 	return MitmConnect, host
 }
+
+func ReqHostMatches(regexps ...*regexp.Regexp) ReqConditionFunc {
+	return func(req *http.Request, ctx *ProxyCtx) bool {
+		for _, re := range regexps {
+			if re.MatchString(req.Host) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+var AlwaysReject FuncHttpsHandler = func(host string, ctx *ProxyCtx) (*ConnectAction, string) {
+	return RejectConnect, host
+}

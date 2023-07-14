@@ -5,9 +5,21 @@ import (
 	"crypto/x509"
 )
 
+func init() {
+	if myproxyCaErr != nil {
+		panic("Error parsing builtin CA " + myproxyCaErr.Error())
+	}
+	var err error
+	if MyproxyCa.Leaf, err = x509.ParseCertificate(MyproxyCa.Certificate[0]); err != nil {
+		panic("Error parsing builtin CA " + err.Error())
+	}
+}
+
 var tlsClientSkipVerify = &tls.Config{InsecureSkipVerify: true}
 
-var defaultTLSConfig = &tls.Config{InsecureSkipVerify: true}
+var defaultTLSConfig = &tls.Config{
+	InsecureSkipVerify: true,
+}
 
 var CA_CERT = []byte(`-----BEGIN CERTIFICATE-----
 MIIF9DCCA9ygAwIBAgIJAODqYUwoVjJkMA0GCSqGSIb3DQEBCwUAMIGOMQswCQYD
@@ -97,13 +109,3 @@ cj/azKBaT04IOMLaN8xfSqitJYSraWMVNgGJM5vfcVaivZnNh0lZBv+qu6YkdM88
 -----END RSA PRIVATE KEY-----`)
 
 var MyproxyCa, myproxyCaErr = tls.X509KeyPair(CA_CERT, CA_KEY)
-
-func init() {
-	if myproxyCaErr != nil {
-		panic("Error parsing builtin CA" + myproxyCaErr.Error())
-	}
-	var err error
-	if MyproxyCa.Leaf, err = x509.ParseCertificate(MyproxyCa.Certificate[0]); err != nil {
-		panic("Error parsing builtin CA " + err.Error())
-	}
-}
